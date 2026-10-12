@@ -1,0 +1,9 @@
+# makepkg build leftovers
+/src/
+/pkg/
+*.deb
+*.pkg.tar.*
+UnRAR-license-*.txt
+UnRAR-exception-*.md
+# generated for the AUR by the deploy job
+.SRCINFO

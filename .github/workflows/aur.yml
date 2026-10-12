@@ -1,0 +1,71 @@
+# Test-builds the package on every PR, and publishes it to the AUR once the
+# change is on main. Branches and PRs never reach the AUR.
+name: aur
+
+on:
+  pull_request:
+    paths: [PKGBUILD, .github/workflows/**]
+  push:
+    branches: [main]
+    paths: [PKGBUILD]
+  workflow_dispatch:
+  # Called by bump.yml after it commits a new version. (A push made with the
+  # default GITHUB_TOKEN does not trigger the `push` event above.)
+  workflow_call:
+    secrets:
+      AUR_USERNAME: { required: true }
+      AUR_EMAIL: { required: true }
+      AUR_SSH_PRIVATE_KEY: { required: true }
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git namcap
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Build with makepkg
+        run: |
+          # makepkg refuses to run as root
+          useradd -m builder
+          chown -R builder: .
+          runuser -u builder -- makepkg --nodeps --clean --cleanbuild --noconfirm
+
+      - name: Lint with namcap
+        run: runuser -u builder -- namcap PKGBUILD ./*.pkg.tar.zst
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency: aur-deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Read version
+        id: ver
+        run: |
+          echo "pkgver=$(sed -n 's/^pkgver=//p' PKGBUILD)" >> "$GITHUB_OUTPUT"
+          echo "pkgrel=$(sed -n 's/^pkgrel=//p' PKGBUILD)" >> "$GITHUB_OUTPUT"
+
+      # Clones the AUR repo, copies PKGBUILD in, regenerates .SRCINFO, and
+      # commits as the identity below. Nothing is pushed if nothing changed.
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        with:
+          pkgname: ps5upload-bin
+          pkgbuild: ./PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ steps.ver.outputs.pkgver }}-${{ steps.ver.outputs.pkgrel }}
